@@ -1,3 +1,6 @@
-/chroma_db
-/images
+chroma_db/*
+!chroma_db/.gitkeep
+images/*
+!images/.gitkeep
 /venv
+/gitkeep
