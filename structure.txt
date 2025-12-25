@@ -1,0 +1,6 @@
+smartlens/
+├── images/               # Put your personal photos here (jpg, png, jpeg)
+├── chroma_db/            # ChromaDB will create this folder to persist data
+├── app.py                # Main application script
+├── requirements.txt      # Dependencies
+└── README.md             # Documentation
