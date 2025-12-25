@@ -3,4 +3,3 @@ chroma_db/*
 images/*
 !images/.gitkeep
 /venv
-/gitkeep
