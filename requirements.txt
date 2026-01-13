@@ -1,6 +1,6 @@
 streamlit
+transformers
+torch
 sentence-transformers
 chromadb
-Pillow
-torch
 pysqlite3-binary

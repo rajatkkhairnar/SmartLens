@@ -1,163 +1,123 @@
-import streamlit as st
-import os
-
+# --- PATCH: Fix SQLite for ChromaDB on Streamlit Cloud ---
+# This MUST be the very first code in the file
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
+import streamlit as st
+import os
+import logging
 
-import logging 
-
-# --- PATCH: Silence "Slow Processor" Warning ---
+# --- PATCH: Fix "Connection Reset" / Crashes ---
+# 1. Disable Tokenizer Parallelism (prevents thread deadlocks/crashes)
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# 2. Silence Warnings
 logging.getLogger('transformers').setLevel(logging.ERROR)
 
 from PIL import Image
 from sentence_transformers import SentenceTransformer
-import chromadb  # <--- Now safe to import
+import chromadb
 from chromadb.utils import embedding_functions
 
 # --- CONFIGURATION ---
 IMAGE_FOLDER = './images'
 DB_PATH = './chroma_db'
-COLLECTION_NAME = 'personal_photos'
+COLLECTION_NAME = 'photos'
 
 # Ensure image directory exists
 if not os.path.exists(IMAGE_FOLDER):
     os.makedirs(IMAGE_FOLDER)
 
-# --- RECRUITER NOTES: CONCEPTS ---
-# 1. Vector Embeddings: 
-#    Computers don't understand images or text directly; they understand numbers.
-#    An "embedding" is a list of floating-point numbers (a vector) that represents 
-#    the semantic meaning of the data. Similar images will have mathematically 
-#    similar lists of numbers.
-#
-# 2. Why CLIP (Contrastive Language-Image Pre-Training)?
-#    Standard models work on either Text OR Images. CLIP is "Multimodal."
-#    It maps both text and images into the SAME vector space. This allows us 
-#    to compare a text query ("dog on beach") directly with an image 
-#    using cosine similarity.
-
 # --- 1. LOAD MODEL (Cached) ---
 @st.cache_resource
 def load_model():
-    """
-    Loads the CLIP model. Cached so we don't reload it 
-    every time the user interacts with the UI.
-    """
+    # Removed use_fast=True to avoid the warning/error
     return SentenceTransformer('clip-ViT-B-32')
 
 # --- 2. DATABASE SETUP ---
 def get_chroma_collection():
-    """
-    Initializes a persistent ChromaDB client.
-    """
     client = chromadb.PersistentClient(path=DB_PATH)
-    # Get or create the collection
     collection = client.get_or_create_collection(
         name=COLLECTION_NAME,
-        # We use the default L2 (Euclidean) distance, but Cosine is also popular for CLIP
-        metadata={"hnsw:space": "cosine"} 
+        metadata={"hnsw:space": "cosine"}
     )
     return collection
 
 # --- 3. INDEXING LOGIC ---
 def index_images(model, collection):
-    """
-    Scans the ./images folder, generates embeddings, and saves them to ChromaDB.
-    """
     image_files = [f for f in os.listdir(IMAGE_FOLDER) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
     
     if not image_files:
-        st.warning(f"No images found in {IMAGE_FOLDER}. Please add some photos!")
+        st.warning(f"No images found in {IMAGE_FOLDER}.")
         return
 
-    # Check which images are already indexed to avoid re-processing
     existing_ids = collection.get()['ids']
-    
     new_images = []
     new_ids = []
     
     for img_file in image_files:
         if img_file not in existing_ids:
             try:
-                # Open image
                 image_path = os.path.join(IMAGE_FOLDER, img_file)
                 image = Image.open(image_path)
-                
-                # Convert to RGB to avoid alpha channel issues
                 new_images.append(image.convert("RGB")) 
-                new_ids.append(img_file) # Use filename as ID
+                new_ids.append(img_file)
             except Exception as e:
                 print(f"Error loading {img_file}: {e}")
 
     if new_images:
         with st.spinner(f"Indexing {len(new_images)} new images..."):
-            # Generate Embeddings (The "Magic" part)
-            embeddings = model.encode(new_images)
-            
-            # Add to ChromaDB
-            collection.add(
-                embeddings=embeddings.tolist(),
-                ids=new_ids,
-                metadatas=[{"filename": f} for f in new_ids]
-            )
-        st.success(f"Successfully indexed {len(new_images)} new images!")
+            # Batch processing to prevent Memory Crashes
+            batch_size = 50
+            for i in range(0, len(new_images), batch_size):
+                batch_imgs = new_images[i : i + batch_size]
+                batch_ids = new_ids[i : i + batch_size]
+                
+                embeddings = model.encode(batch_imgs)
+                collection.add(
+                    embeddings=embeddings.tolist(),
+                    ids=batch_ids,
+                    metadatas=[{"filename": f} for f in batch_ids]
+                )
+        st.success(f"Indexed {len(new_images)} new images!")
     else:
-        pass # No new images to index
+        st.info("No new images to index.")
 
 # --- 4. MAIN UI ---
 def main():
-    st.title("📸 SmartLens: Semantic Image Search")
-    st.markdown("Search your local photos using **natural language**.")
+    st.title("📸 SmartLens Search")
 
-    # Load resources
     model = load_model()
     collection = get_chroma_collection()
 
-    # Sidebar for controls
     with st.sidebar:
-        st.header("Settings")
-        if st.button("Re-Index Image Folder"):
+        st.header("Controls")
+        # MOVED indexing behind this button to stop startup crashes
+        if st.button("Scan & Index Images"):
             index_images(model, collection)
-        st.write(f"Images in folder: {len(os.listdir(IMAGE_FOLDER))}")
-
-    # Run indexing on startup (optional, keeps DB fresh)
-    index_images(model, collection)
+        
+        count = len(os.listdir(IMAGE_FOLDER))
+        st.write(f"Images in folder: {count}")
 
     # Search Interface
-    query = st.text_input("What are you looking for?", placeholder="e.g., 'receipts for coffee' or 'cat sleeping'")
+    query = st.text_input("Search:", placeholder="e.g., 'cat sleeping'")
 
     if query:
-        # 1. Embed the query text
         query_embedding = model.encode([query])
-        
-        # 2. Query ChromaDB
         results = collection.query(
             query_embeddings=query_embedding.tolist(),
-            n_results=3 # Return top 3 matches
+            n_results=3
         )
         
-        # 3. Display Results
         if results['ids'] and results['ids'][0]:
-            st.write("### Top Matches")
-            
-            # Safely get distances; default to an empty list if None
-            distances = results.get('distances', [[]])[0] if results.get('distances') else []
-            
             cols = st.columns(3)
             for idx, file_id in enumerate(results['ids'][0]):
                 image_path = os.path.join(IMAGE_FOLDER, file_id)
-                # Ensure we have a distance for this specific index
-                distance = distances[idx] if idx < len(distances) else 0.0
-                
                 if os.path.exists(image_path):
                     with cols[idx]:
-                        st.image(image_path, caption=f"{file_id}\n(Score: {distance:.4f})")
-                else:
-                    st.error(f"Image {file_id} not found on disk.")
+                        st.image(image_path, caption=file_id)
         else:
-            st.info("No matching images found.")
+            st.info("No matches found. Did you click 'Scan & Index'?")
 
 if __name__ == "__main__":
     main()
