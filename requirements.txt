@@ -3,3 +3,4 @@ sentence-transformers
 chromadb
 Pillow
 torch
+pysqlite3-binary

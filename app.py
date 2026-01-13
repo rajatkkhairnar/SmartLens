@@ -1,15 +1,20 @@
 import streamlit as st
 import os
+
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+
+
+import logging 
+
+# --- PATCH: Silence "Slow Processor" Warning ---
+logging.getLogger('transformers').setLevel(logging.ERROR)
+
 from PIL import Image
 from sentence_transformers import SentenceTransformer
-import chromadb
+import chromadb  # <--- Now safe to import
 from chromadb.utils import embedding_functions
-
-import logging # <--- Add this
-
-# --- PATCH: Silence the generic "slow processor" warning ---
-# This stops the 'transformers' library from cluttering your logs with warnings
-logging.getLogger('transformers').setLevel(logging.ERROR)
 
 # --- CONFIGURATION ---
 IMAGE_FOLDER = './images'
