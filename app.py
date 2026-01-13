@@ -5,6 +5,12 @@ from sentence_transformers import SentenceTransformer
 import chromadb
 from chromadb.utils import embedding_functions
 
+import logging # <--- Add this
+
+# --- PATCH: Silence the generic "slow processor" warning ---
+# This stops the 'transformers' library from cluttering your logs with warnings
+logging.getLogger('transformers').setLevel(logging.ERROR)
+
 # --- CONFIGURATION ---
 IMAGE_FOLDER = './images'
 DB_PATH = './chroma_db'
@@ -131,10 +137,14 @@ def main():
         if results['ids'] and results['ids'][0]:
             st.write("### Top Matches")
             
+            # Safely get distances; default to an empty list if None
+            distances = results.get('distances', [[]])[0] if results.get('distances') else []
+            
             cols = st.columns(3)
             for idx, file_id in enumerate(results['ids'][0]):
                 image_path = os.path.join(IMAGE_FOLDER, file_id)
-                distance = results['distances'][0][idx]
+                # Ensure we have a distance for this specific index
+                distance = distances[idx] if idx < len(distances) else 0.0
                 
                 if os.path.exists(image_path):
                     with cols[idx]:
