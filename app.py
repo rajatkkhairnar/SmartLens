@@ -6,6 +6,7 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import streamlit as st
 import os
 import logging
+import gc
 
 # --- PATCH: Settings to prevent crashes ---
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -38,45 +39,71 @@ def get_chroma_collection():
     )
     return collection
 
-# --- 3. INDEXING LOGIC ---
+# --- 3. INDEXING LOGIC (Memory Safe) ---
 def index_images(model, collection):
     image_files = [f for f in os.listdir(IMAGE_FOLDER) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
     
     if not image_files:
-        st.warning(f"No images found in {IMAGE_FOLDER}. Upload some via GitHub or add to folder!")
+        st.warning(f"No images found in {IMAGE_FOLDER}.")
         return
 
-    existing_ids = collection.get()['ids']
-    new_images = []
-    new_ids = []
-    
-    for img_file in image_files:
-        if img_file not in existing_ids:
-            try:
-                image_path = os.path.join(IMAGE_FOLDER, img_file)
-                image = Image.open(image_path)
-                new_images.append(image.convert("RGB")) 
-                new_ids.append(img_file)
-            except Exception as e:
-                print(f"Error loading {img_file}: {e}")
+    # Check existing files to avoid re-work
+    existing_ids = set(collection.get()['ids']) # Use set for faster lookup
+    new_files = [f for f in image_files if f not in existing_ids]
 
-    if new_images:
-        with st.spinner(f"Indexing {len(new_images)} new images..."):
-            # Batch process to save RAM
-            batch_size = 50
-            for i in range(0, len(new_images), batch_size):
-                batch_imgs = new_images[i : i + batch_size]
-                batch_ids = new_ids[i : i + batch_size]
+    if not new_files:
+        st.info("No new images to index.")
+        return
+
+    # Progress bar for user feedback
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    # BATCH SIZE 5 (Very small to prevent crashing)
+    batch_size = 5
+    total_batches = (len(new_files) + batch_size - 1) // batch_size
+
+    for i in range(0, len(new_files), batch_size):
+        try:
+            # 1. Clear memory before starting a batch
+            gc.collect() 
+            
+            batch_files = new_files[i : i + batch_size]
+            batch_images = []
+            valid_ids = []
+
+            # 2. Load images one by one
+            for file_name in batch_files:
+                try:
+                    img_path = os.path.join(IMAGE_FOLDER, file_name)
+                    # Open and convert immediately to save RAM
+                    img = Image.open(img_path).convert("RGB")
+                    batch_images.append(img)
+                    valid_ids.append(file_name)
+                except Exception as e:
+                    print(f"Skipping {file_name}: {e}")
+
+            if batch_images:
+                # 3. Generate Embeddings
+                embeddings = model.encode(batch_images)
                 
-                embeddings = model.encode(batch_imgs)
+                # 4. Save to ChromaDB
                 collection.add(
                     embeddings=embeddings.tolist(),
-                    ids=batch_ids,
-                    metadatas=[{"filename": f} for f in batch_ids]
+                    ids=valid_ids,
+                    metadatas=[{"filename": f} for f in valid_ids]
                 )
-        st.success(f"Indexed {len(new_images)} new images!")
-    else:
-        st.info("No new images to index.")
+            
+            # Update progress
+            current_progress = (i + batch_size) / len(new_files)
+            progress_bar.progress(min(current_progress, 1.0))
+            status_text.text(f"Indexed {min(i + batch_size, len(new_files))}/{len(new_files)} images...")
+            
+        except Exception as e:
+            st.error(f"Crash at batch {i}: {e}")
+            break
+            
+    st.success(f"Finished! Indexed {len(new_files)} new images.")
 
 # --- 4. MAIN UI ---
 def main():
