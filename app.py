@@ -132,7 +132,7 @@ def main():
         st.write(f"Images in folder: {count}")
     
     # Search Interface
-    query = st.text_input("Search:", placeholder="e.g., 'Mountains' or 'Buildings")
+    query = st.text_input("Search:", placeholder="e.g., 'Mountains' or 'Buildings'")
 
     if query:
         # 1. Embed the query text
@@ -156,10 +156,10 @@ def main():
                 image_path = os.path.join(IMAGE_FOLDER, file_id)
                 # Ensure we have a distance for this specific index
                 distance = distances[idx] if idx < len(distances) else 0.0
-                
+
                 if os.path.exists(image_path):
                     with cols[idx]:
-                        st.image(image_path, caption=file_id)
+                        st.image(image_path, caption=f"{file_id}\n(Score: {distance:.4f})")
         else:
             st.info("No matches found.")
 
