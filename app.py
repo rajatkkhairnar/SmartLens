@@ -108,7 +108,7 @@ def index_images(model, collection):
 # --- 4. MAIN UI ---
 def main():
     st.title("📸 SmartLens Search")
-    st.write("Link this demo to your portfolio!")
+    st.write("Search your local photos using **natural language**.")
 
     # Load resources
     try:
@@ -117,7 +117,8 @@ def main():
     except Exception as e:
         st.error(f"Error loading model or DB: {e}")
         return
-
+    
+    #Sidebar for controls
     with st.sidebar:
         st.header("Controls")
         if st.button("Scan & Index Images"):
@@ -129,20 +130,33 @@ def main():
         else:
             count = 0
         st.write(f"Images in folder: {count}")
-
-    query = st.text_input("Search:", placeholder="e.g., 'cat sleeping'")
+    
+    # Search Interface
+    query = st.text_input("Search:", placeholder="e.g., 'Mountains' or 'Buildings")
 
     if query:
+        # 1. Embed the query text
         query_embedding = model.encode([query])
+        # 2. Query ChromaDB
         results = collection.query(
             query_embeddings=query_embedding.tolist(),
-            n_results=3
+            n_results=3 # Return top 3 matches
         )
         
+        # 3. Display Results
         if results['ids'] and results['ids'][0]:
+            st.write("### Top Matches")
+
+            # Safely get distances; default to an empty list if None
+            # Safely get distances; default to an empty list if None
+            distances = results.get('distances', [[]])[0] if results.get('distances') else []
+
             cols = st.columns(3)
             for idx, file_id in enumerate(results['ids'][0]):
                 image_path = os.path.join(IMAGE_FOLDER, file_id)
+                # Ensure we have a distance for this specific index
+                distance = distances[idx] if idx < len(distances) else 0.0
+                
                 if os.path.exists(image_path):
                     with cols[idx]:
                         st.image(image_path, caption=file_id)
